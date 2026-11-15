@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#000000">
+  <title>ブロック崩し</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- スタート画面 -->
+  <div id="startScreen">
+    <img id="titleImage" src="title.gif" alt="タイトル">
+    <button id="startButton" type="button">GAME START</button>
+  </div>
+
+  <!-- ゲーム画面（読み込み時は非表示） -->
+  <canvas id="gameCanvas"></canvas>
+
+  <!-- クリア演出用（GIFをアニメさせるためのオーバーレイ。クリア時のみ表示） -->
+  <img id="clearOverlay" src="clear.gif" alt="CLEAR!">
+
+  <script src="main.js"></script>
+</body>
+</html>
