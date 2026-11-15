@@ -12,11 +12,20 @@ const clearOverlay = document.getElementById("clearOverlay");
 // ===================================================
 // 画像アセット
 // ===================================================
-const bgImage = new Image();
-bgImage.src = "bg.png";
+function loadImage(src) {
+  const img = new Image();
+  img.src = src;
+  return img;
+}
 
-const clearImage = new Image();
-clearImage.src = "clear.gif";
+const bgImage     = loadImage("bg.png");      // 画面全体の背景
+const hiddenImage = loadImage("hidden.png");  // ブロックの裏に隠れるイラスト
+const ballImage   = loadImage("ball.png");    // ボール
+const paddleImage = loadImage("paddle.png");  // パドル
+
+function isReady(img) {
+  return img.complete && img.naturalWidth > 0;
+}
 
 // ===================================================
 // 音響アセット
@@ -43,21 +52,25 @@ function playSE(audio) {
   } catch (e) { /* 再生失敗は無視 */ }
 }
 
-// iOS等でSEが後から鳴らない問題への対策：
-// スタートボタンのタップ中に全SEを無音で一度再生して「解錠」しておく
+// iOS Safari の再生制限対策：
+// スタートボタンのタップ中に、全Audioを無音で一度再生してすぐ止める
 function unlockAudio() {
-  allSE.forEach((a) => {
+  [bgm, ...allSE].forEach((a) => {
     const prevVolume = a.volume;
     a.volume = 0;
-    const p = a.play();
     const restore = () => {
       a.pause();
       a.currentTime = 0;
       a.volume = prevVolume;
     };
-    if (p && typeof p.then === "function") {
-      p.then(restore).catch(restore);
-    } else {
+    try {
+      const p = a.play();
+      if (p && typeof p.then === "function") {
+        p.then(restore).catch(restore);
+      } else {
+        restore();
+      }
+    } catch (e) {
       restore();
     }
   });
@@ -90,24 +103,29 @@ const brickColors = ["#ff4d6d", "#ff9f1c", "#ffd60a", "#4cc9f0", "#9b5de5"];
 // ===================================================
 // 初期化
 // ===================================================
-function resizeCanvas() {
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
+function updatePaddleSize() {
+  // パドル画像の縦横比を維持（画像未読込時は仮サイズ）
+  paddleWidth = canvas.width * 0.25;
+  if (isReady(paddleImage)) {
+    paddleHeight = paddleWidth * (paddleImage.naturalHeight / paddleImage.naturalWidth);
+  } else {
+    paddleHeight = Math.max(12, canvas.height * 0.02);
+  }
+  paddleY = canvas.height - paddleHeight - canvas.height * 0.08;
 }
 
 function initGame() {
-  resizeCanvas();
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
   const W = canvas.width;
   const H = canvas.height;
 
   // パドル
-  paddleWidth = W * 0.25;
-  paddleHeight = Math.max(12, H * 0.02);
+  updatePaddleSize();
   paddleX = (W - paddleWidth) / 2;
-  paddleY = H - paddleHeight - H * 0.08;
 
   // ボール
-  ballRadius = Math.max(6, W * 0.02);
+  ballRadius = Math.max(8, W * 0.025);
   x = W / 2;
   y = paddleY - ballRadius - 2;
   const speed = Math.max(4, W * 0.011);
@@ -126,7 +144,11 @@ function initGame() {
   for (let c = 0; c < brickColumnCount; c++) {
     bricks[c] = [];
     for (let r = 0; r < brickRowCount; r++) {
-      bricks[c][r] = { x: 0, y: 0, status: 1 };
+      bricks[c][r] = {
+        x: brickOffsetLeft + c * (brickWidth + brickPadding),
+        y: brickOffsetTop + r * (brickHeight + brickPadding),
+        status: 1,
+      };
       remainingBricks++;
     }
   }
@@ -187,23 +209,22 @@ function collisionDetection() {
 }
 
 // ===================================================
-// 描画ヘルパー
+// 描画
 // ===================================================
 
-// 画像を画面いっぱいにcover表示
+// 画像を画面いっぱいにcover表示（縦横比維持・はみ出しは切り取り）
 function drawImageCover(img) {
   const W = canvas.width;
   const H = canvas.height;
-  const iw = img.naturalWidth;
-  const ih = img.naturalHeight;
-  const scale = Math.max(W / iw, H / ih);
-  const dw = iw * scale;
-  const dh = ih * scale;
+  const scale = Math.max(W / img.naturalWidth, H / img.naturalHeight);
+  const dw = img.naturalWidth * scale;
+  const dh = img.naturalHeight * scale;
   ctx.drawImage(img, (W - dw) / 2, (H - dh) / 2, dw, dh);
 }
 
+// 1. 画面全体の背景
 function drawBackground() {
-  if (bgImage.complete && bgImage.naturalWidth > 0) {
+  if (isReady(bgImage)) {
     drawImageCover(bgImage);
   } else {
     ctx.fillStyle = "#111";
@@ -211,47 +232,63 @@ function drawBackground() {
   }
 }
 
+// 2. 隠しイラスト：ブロック群全体の領域と同じ位置・サイズで描画
+function drawHiddenImage() {
+  const areaX = brickOffsetLeft;
+  const areaY = brickOffsetTop;
+  const areaW = brickColumnCount * brickWidth + (brickColumnCount - 1) * brickPadding;
+  const areaH = brickRowCount * brickHeight + (brickRowCount - 1) * brickPadding;
+
+  if (isReady(hiddenImage)) {
+    ctx.drawImage(hiddenImage, areaX, areaY, areaW, areaH);
+  }
+}
+
+// 3. ブロック（status=1のみ描画。status=0は描かず奥のhidden.pngを見せる）
 function drawBricks() {
   for (let c = 0; c < brickColumnCount; c++) {
     for (let r = 0; r < brickRowCount; r++) {
       const b = bricks[c][r];
-      if (b.status !== 1) continue; // 壊れたブロックは描かない → 背景が透けて見える
+      if (b.status !== 1) continue;
 
-      b.x = brickOffsetLeft + c * (brickWidth + brickPadding);
-      b.y = brickOffsetTop + r * (brickHeight + brickPadding);
-
-      ctx.beginPath();
-      ctx.rect(b.x, b.y, brickWidth, brickHeight);
       ctx.fillStyle = brickColors[r % brickColors.length];
-      ctx.fill();
+      ctx.fillRect(b.x, b.y, brickWidth, brickHeight);
       ctx.strokeStyle = "rgba(255,255,255,0.6)";
       ctx.lineWidth = 2;
-      ctx.stroke();
-      ctx.closePath();
+      ctx.strokeRect(b.x, b.y, brickWidth, brickHeight);
     }
   }
 }
 
+// 4. ボール（当たり判定の中心と画像の中心を一致させる）
 function drawBall() {
-  ctx.beginPath();
-  ctx.arc(x, y, ballRadius, 0, Math.PI * 2);
-  ctx.fillStyle = "#ffffff";
-  ctx.fill();
-  ctx.strokeStyle = "#333";
-  ctx.lineWidth = 2;
-  ctx.stroke();
-  ctx.closePath();
+  if (isReady(ballImage)) {
+    ctx.drawImage(
+      ballImage,
+      x - ballRadius,
+      y - ballRadius,
+      ballRadius * 2,
+      ballRadius * 2
+    );
+  } else {
+    // 画像が読み込めなかった場合の代替表示
+    ctx.beginPath();
+    ctx.arc(x, y, ballRadius, 0, Math.PI * 2);
+    ctx.fillStyle = "#fff";
+    ctx.fill();
+    ctx.closePath();
+  }
 }
 
+// 5. パドル
 function drawPaddle() {
-  ctx.beginPath();
-  ctx.rect(paddleX, paddleY, paddleWidth, paddleHeight);
-  ctx.fillStyle = "#00e5ff";
-  ctx.fill();
-  ctx.strokeStyle = "#fff";
-  ctx.lineWidth = 2;
-  ctx.stroke();
-  ctx.closePath();
+  if (isReady(paddleImage)) {
+    ctx.drawImage(paddleImage, paddleX, paddleY, paddleWidth, paddleHeight);
+  } else {
+    // 画像が読み込めなかった場合の代替表示
+    ctx.fillStyle = "#00e5ff";
+    ctx.fillRect(paddleX, paddleY, paddleWidth, paddleHeight);
+  }
 }
 
 // ===================================================
@@ -265,7 +302,7 @@ function handleClear() {
   bgm.currentTime = 0;
   playSE(seClear); // 1回だけ再生
 
-  // GIFをアニメ表示するためのオーバーレイ（canvasのdrawImageは静止画になるため）
+  // Canvas上のGIFは静止画になるため、HTMLのimg要素を重ねて表示
   clearOverlay.style.display = "block";
 }
 
@@ -292,37 +329,32 @@ function handleGameOver() {
 // メインループ
 // ===================================================
 function draw() {
-  // ---- クリア時：通常描画をスキップしてクリア画像のみ描画し、ループ停止 ----
+  // クリア済み・ゲームオーバー済みならループ停止
   if (isGameCleared) {
     handleClear();
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    if (clearImage.complete && clearImage.naturalWidth > 0) {
-      drawImageCover(clearImage);
-    } else {
-      ctx.fillStyle = "#000";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-    }
-    return; // requestAnimationFrame を呼ばない＝完全停止
+    return;
   }
-
-  // ---- ゲームオーバー時：ループ停止（リロード待ち） ----
   if (isGameOver) return;
 
   const W = canvas.width;
+  const H = canvas.height;
 
-  // 通常描画（背景 → ブロック → ボール → パドル の順）
-  ctx.clearRect(0, 0, W, canvas.height);
-  drawBackground();
-  drawBricks();
-  drawBall();
-  drawPaddle();
+  updatePaddleSize();
+  if (paddleX + paddleWidth > W) paddleX = W - paddleWidth;
 
-  // ブロック衝突
+  // 描画（奥 → 手前）
+  ctx.clearRect(0, 0, W, H);
+  drawBackground();   // 1. bg.png
+  drawHiddenImage();  // 2. hidden.png
+  drawBricks();       // 3. ブロック
+  drawBall();         // 4. ball.png
+  drawPaddle();       // 5. paddle.png
+
+  // ブロックとの衝突（全破壊でクリア）
   collisionDetection();
   if (isGameCleared) {
-    // 次フレームでクリア描画へ
-    requestAnimationFrame(draw);
-    return;
+    handleClear();
+    return; // draw ループ停止
   }
 
   // 左右の壁
@@ -355,7 +387,7 @@ function draw() {
     playSE(seHitPaddle);
   }
   // 下に落ちた
-  else if (y - ballRadius > canvas.height) {
+  else if (y - ballRadius > H) {
     handleGameOver();
     return;
   }
@@ -373,7 +405,7 @@ function startGame() {
   if (isGameStarted) return; // click と touchstart の二重発火を防止
   isGameStarted = true;
 
-  // ユーザー操作の中で音声を解錠 → BGM再生
+  // ユーザー操作の中で全Audioを解錠 → BGM再生
   unlockAudio();
   const p = bgm.play();
   if (p && typeof p.catch === "function") p.catch(() => {});
@@ -388,11 +420,11 @@ function startGame() {
 
 startButton.addEventListener("click", startGame);
 startButton.addEventListener("touchstart", (e) => {
-  e.preventDefault(); // 直後に合成clickが発火するのを防ぐ
+  e.preventDefault(); // 直後の合成clickを防ぐ
   startGame();
 }, { passive: false });
 
-// 向きの変更・リサイズ時はリロードしてレイアウトを再計算（ゲーム中のみ）
+// 画面の向きが変わったらレイアウト再計算のためリロード（ゲーム中のみ）
 window.addEventListener("orientationchange", () => {
   if (isGameStarted && !isGameCleared) location.reload();
 });
